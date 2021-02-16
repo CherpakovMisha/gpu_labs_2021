@@ -1,3 +1,0 @@
-﻿  WinMain.cpp
-C:\Users\Asus\source\repos\triangle or cube\triangle or cube\WinMain.cpp(390,15): warning C4244: return: преобразование "WPARAM" в "int", возможна потеря данных
-  triangle or cube.vcxproj -> C:\Users\Asus\source\repos\triangle or cube\x64\Debug\triangle or cube.exe
