@@ -1,0 +1,473 @@
+#include <windows.h>
+#include <d3d11.h>      
+#include <dxgi.h>        
+#include <d3dcompiler.h> 
+
+#include <assert.h>
+#include <d3d10.h>
+#include <DirectXMath.h>
+#include <directxmath.h>
+
+
+#pragma comment( lib, "user32" )          
+#pragma comment( lib, "d3d11.lib" )       
+#pragma comment( lib, "dxgi.lib" )       
+#pragma comment( lib, "d3dcompiler.lib" ) 
+
+IDXGISwapChain* SwapChain;
+ID3D11Device* d3d11Device;
+ID3D11DeviceContext* d3d11DevCon;
+ID3D11RenderTargetView* renderTargetView;
+
+ID3D11Buffer* triangleVertBuffer;
+ID3D11VertexShader* VS;
+ID3D11PixelShader* PS;
+ID3D10Blob* VS_Buffer;
+ID3D10Blob* PS_Buffer;
+
+ID3D11InputLayout* vertLayout;
+
+DirectX::XMMATRIX       g_World;
+DirectX::XMMATRIX       g_View;
+DirectX::XMMATRIX       g_Projection;
+DirectX::XMMATRIX       g_Translation;
+
+LPCTSTR WndClassName = (LPCTSTR)"firstwindow";
+HWND hwnd = NULL;
+HRESULT hr;
+
+const int Width = 300;
+const int Height = 300;
+
+//Function Prototypes//
+bool InitializeDirect3d11App(HINSTANCE hInstance);
+void CleanUp();
+bool InitScene();
+void UpdateScene();
+void DrawScene();
+HRESULT CreateViews(UINT width, UINT height);
+
+bool InitializeWindow(HINSTANCE hInstance,
+    int ShowWnd,
+    int width, int height,
+    bool windowed);
+int messageloop();
+
+LRESULT CALLBACK WndProc(HWND hWnd,
+    UINT msg,
+    WPARAM wParam,
+    LPARAM lParam);
+
+struct Vertex {
+    Vertex() {}
+    Vertex(float x, float y, float z)
+        : pos(x, y, z) {}
+
+
+    DirectX::XMFLOAT3 pos;
+};
+
+D3D11_INPUT_ELEMENT_DESC layout[] =
+{
+    { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+};
+UINT numElements = ARRAYSIZE(layout);
+
+
+int WINAPI WinMain(HINSTANCE hInstance,    //Main windows function
+    HINSTANCE hPrevInstance,
+    LPSTR lpCmdLine,
+    int nShowCmd)
+{
+
+    if (!InitializeWindow(hInstance, nShowCmd, Width, Height, true))
+    {
+        MessageBox(0, (LPCTSTR)"Window Initialization - Failed",
+            (LPCTSTR)"Error", MB_OK);
+        return 0;
+    }
+
+    if (!InitializeDirect3d11App(hInstance))    //Initialize Direct3D
+    {
+        MessageBox(0, (LPCTSTR)"Direct3D Initialization - Failed",
+            (LPCTSTR)"Error", MB_OK);
+        return 0;
+    }
+
+    if (!InitScene())    //Initialize our scene
+    {
+        MessageBox(0, (LPCTSTR)"Scene Initialization - Failed",
+            (LPCTSTR)"Error", MB_OK);
+        return 0;
+    }
+
+    messageloop();
+
+    CleanUp();
+
+    return 0;
+}
+
+bool InitializeWindow(HINSTANCE hInstance,
+    int ShowWnd,
+    int width, int height,
+    bool windowed)
+{
+    typedef struct _WNDCLASS {
+        UINT cbSize;
+        UINT style;
+        WNDPROC lpfnWndProc;
+        int cbClsExtra;
+        int cbWndExtra;
+        HANDLE hInstance;
+        HICON hIcon;
+        HCURSOR hCursor;
+        HBRUSH hbrBackground;
+        LPCTSTR lpszMenuName;
+        LPCTSTR lpszClassName;
+    } WNDCLASS;
+
+    WNDCLASSEX wc;
+
+    wc.cbSize = sizeof(WNDCLASSEX);
+    wc.style = CS_HREDRAW | CS_VREDRAW;
+    wc.lpfnWndProc = WndProc;
+    wc.cbClsExtra = NULL;
+    wc.cbWndExtra = NULL;
+    wc.hInstance = hInstance;
+    wc.hIcon = LoadIcon(NULL, IDI_APPLICATION);
+    wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+    wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 2);
+    wc.lpszMenuName = NULL;
+    wc.lpszClassName = WndClassName;
+    wc.hIconSm = LoadIcon(NULL, IDI_APPLICATION);
+
+    if (!RegisterClassEx(&wc))
+    {
+        MessageBox(NULL, (LPCTSTR)"Error registering class",
+            (LPCTSTR)"Error", MB_OK | MB_ICONERROR);
+        return 1;
+    }
+
+    hwnd = CreateWindowEx(
+        NULL,
+        WndClassName,
+        L"Main Window",
+        WS_OVERLAPPEDWINDOW,
+        CW_USEDEFAULT, CW_USEDEFAULT,
+        width, height,
+        NULL,
+        NULL,
+        hInstance,
+        NULL
+    );
+
+    if (!hwnd)
+    {
+        MessageBox(NULL, (LPCTSTR)"Error creating window",
+            (LPCTSTR)"Error", MB_OK | MB_ICONERROR);
+        return 1;
+    }
+
+    ShowWindow(hwnd, ShowWnd);
+    UpdateWindow(hwnd);
+
+    return true;
+}
+
+bool InitializeDirect3d11App(HINSTANCE hInstance)
+{
+    //Describe our Buffer
+    DXGI_MODE_DESC bufferDesc;
+
+    ZeroMemory(&bufferDesc, sizeof(DXGI_MODE_DESC));
+
+    bufferDesc.Width = Width;
+    bufferDesc.Height = Height;
+    bufferDesc.RefreshRate.Numerator = 60;
+    bufferDesc.RefreshRate.Denominator = 1;
+    bufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    bufferDesc.ScanlineOrdering = DXGI_MODE_SCANLINE_ORDER_UNSPECIFIED;
+    bufferDesc.Scaling = DXGI_MODE_SCALING_UNSPECIFIED;
+
+    //Describe our SwapChain
+    DXGI_SWAP_CHAIN_DESC swapChainDesc;
+
+    ZeroMemory(&swapChainDesc, sizeof(DXGI_SWAP_CHAIN_DESC));
+
+    swapChainDesc.BufferDesc = bufferDesc;
+    swapChainDesc.SampleDesc.Count = 1;
+    swapChainDesc.SampleDesc.Quality = 0;
+    swapChainDesc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+    swapChainDesc.BufferCount = 1;
+    swapChainDesc.OutputWindow = hwnd;
+    swapChainDesc.Windowed = TRUE;
+    swapChainDesc.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
+
+    UINT flags = D3D11_CREATE_DEVICE_SINGLETHREADED;
+#if defined( DEBUG ) || defined( _DEBUG )
+    flags |= D3D11_CREATE_DEVICE_DEBUG;
+#endif
+    
+
+    hr = D3D11CreateDeviceAndSwapChain(NULL, D3D_DRIVER_TYPE_HARDWARE, NULL, flags, NULL, NULL,
+        D3D11_SDK_VERSION, &swapChainDesc, &SwapChain, &d3d11Device, NULL, &d3d11DevCon);
+    if (FAILED(hr))
+        return hr;
+
+    //Create our BackBuffer
+    ID3D11Texture2D* BackBuffer;
+    hr = SwapChain->GetBuffer(0, __uuidof(ID3D11Texture2D), (void**)&BackBuffer);
+    if (FAILED(hr))
+        return hr;
+
+    //Create our Render Target
+    hr = d3d11Device->CreateRenderTargetView(BackBuffer, NULL, &renderTargetView);
+    BackBuffer->Release();
+    if (FAILED(hr))
+        return hr;
+
+    //Set our Render Target
+    d3d11DevCon->OMSetRenderTargets(1, &renderTargetView, NULL);
+
+    return true;
+}
+
+void CleanUp()
+{
+    SwapChain->Release();
+    d3d11Device->Release();
+    d3d11DevCon->Release();
+    renderTargetView->Release();
+
+    triangleVertBuffer->Release();
+    VS->Release();
+    PS->Release();
+    VS_Buffer->Release();
+    PS_Buffer->Release();
+    vertLayout->Release();
+
+}
+
+
+bool InitScene()
+{
+    ID3DBlob* vs_blob_ptr = NULL, * ps_blob_ptr = NULL, * error_blob = NULL;
+    UINT flags = D3DCOMPILE_ENABLE_STRICTNESS;
+#if defined( DEBUG ) || defined( _DEBUG )
+    flags |= D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION; 
+#endif
+
+    hr = D3DCompileFromFile(
+        L"shaders.hlsl",
+        nullptr,
+        D3D_COMPILE_STANDARD_FILE_INCLUDE,
+        "VS",
+        "vs_4_0",
+        flags,
+        0,
+        &VS_Buffer,
+        &error_blob);
+    if (FAILED(hr))
+        return hr;
+
+    hr = D3DCompileFromFile(
+        L"shaders.hlsl",
+        nullptr,
+        D3D_COMPILE_STANDARD_FILE_INCLUDE,
+        "PS",
+        "ps_4_0",
+        flags,
+        0,
+        &PS_Buffer,
+        &error_blob);
+    if (FAILED(hr))
+        return hr;
+
+    hr = d3d11Device->CreateVertexShader(VS_Buffer->GetBufferPointer(), VS_Buffer->GetBufferSize(), NULL, &VS);
+    if (FAILED(hr))
+        return hr;
+    hr = d3d11Device->CreatePixelShader(PS_Buffer->GetBufferPointer(), PS_Buffer->GetBufferSize(), NULL, &PS);
+    if (FAILED(hr))
+        return hr;
+
+    d3d11DevCon->VSSetShader(VS, 0, 0);
+    d3d11DevCon->PSSetShader(PS, 0, 0);
+
+    Vertex v[] =
+    {
+
+        Vertex(0.0f, 0.5f, 0.5f),
+        Vertex(0.5f, -0.5f, 0.5f),
+        Vertex(-0.5f, -0.5f, 0.5f),
+    };
+
+    D3D11_BUFFER_DESC vertexBufferDesc;
+    ZeroMemory(&vertexBufferDesc, sizeof(vertexBufferDesc));
+
+    vertexBufferDesc.Usage = D3D11_USAGE_DEFAULT;
+    vertexBufferDesc.ByteWidth = sizeof(Vertex) * 3;
+    vertexBufferDesc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+    vertexBufferDesc.CPUAccessFlags = 0;
+    vertexBufferDesc.MiscFlags = 0;
+
+    D3D11_SUBRESOURCE_DATA vertexBufferData;
+
+    ZeroMemory(&vertexBufferData, sizeof(vertexBufferData));
+    vertexBufferData.pSysMem = v;
+    hr = d3d11Device->CreateBuffer(&vertexBufferDesc, &vertexBufferData, &triangleVertBuffer);
+    if (FAILED(hr))
+        return hr;
+
+    UINT stride = sizeof(Vertex);
+    UINT offset = 0;
+    d3d11DevCon->IASetVertexBuffers(0, 1, &triangleVertBuffer, &stride, &offset);
+
+    d3d11Device->CreateInputLayout(layout, numElements, VS_Buffer->GetBufferPointer(),
+        VS_Buffer->GetBufferSize(), &vertLayout);
+
+    d3d11DevCon->IASetInputLayout(vertLayout);
+
+    d3d11DevCon->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
+    D3D11_VIEWPORT viewport;
+    ZeroMemory(&viewport, sizeof(D3D11_VIEWPORT));
+
+    viewport.TopLeftX = 0;
+    viewport.TopLeftY = 0;
+    viewport.Width = Width;
+    viewport.Height = Height;
+
+    d3d11DevCon->RSSetViewports(1, &viewport);
+
+    return true;
+}
+
+
+void UpdateScene()
+{
+
+
+}
+
+
+void DrawScene()
+{
+
+    float bgColor[4] = { (0.0f, 0.0f, 0.0f, 0.0f) };
+    d3d11DevCon->ClearRenderTargetView(renderTargetView, bgColor);
+    d3d11DevCon->Draw(3, 0);
+
+    SwapChain->Present(0, 0);
+}
+
+
+int messageloop() {
+    MSG msg;
+    ZeroMemory(&msg, sizeof(MSG));
+    while (true)
+    {
+        BOOL PeekMessageL(
+            LPMSG lpMsg,
+            HWND hWnd,
+            UINT wMsgFilterMin,
+            UINT wMsgFilterMax,
+            UINT wRemoveMsg
+        );
+
+        if (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE))
+        {
+            if (msg.message == WM_QUIT)
+                break;
+            TranslateMessage(&msg);
+            DispatchMessage(&msg);
+        }
+        else {
+            UpdateScene();
+            DrawScene();
+        }
+    }
+    return msg.wParam;
+}
+
+LRESULT CALLBACK WndProc(HWND hwnd,
+    UINT msg,
+    WPARAM wParam,
+    LPARAM lParam)
+{   
+    PAINTSTRUCT ps;
+    HDC hdc;
+    HRESULT hr;
+
+    switch (msg)
+    {
+    case WM_PAINT:
+        hdc = BeginPaint(hwnd, &ps);
+        EndPaint(hwnd, &ps);
+        return 0;
+
+    case WM_SIZE:
+        if (SwapChain)
+        {
+            UINT width = LOWORD(lParam);
+            UINT height = HIWORD(lParam);
+            d3d11DevCon->OMSetRenderTargets(0, 0, 0);
+            renderTargetView->Release();
+            d3d11DevCon->Flush();
+            hr = SwapChain->ResizeBuffers(0, 0, 0, DXGI_FORMAT_UNKNOWN, 0);
+            g_Projection = DirectX::XMMatrixPerspectiveFovLH(DirectX::XM_PIDIV2, width / (FLOAT)height, 0.01f, 100.0f);
+            if (SUCCEEDED(hr))
+                hr = CreateViews(LOWORD(lParam), HIWORD(lParam));
+
+            if (FAILED(hr))
+                PostQuitMessage(0);
+        }
+        return 0;
+
+    case WM_KEYDOWN:
+        if (wParam == VK_ESCAPE) {
+            DestroyWindow(hwnd);
+        }
+        return 0;
+
+    case WM_DESTROY:
+        PostQuitMessage(0);
+        return 0;
+    }
+
+    return DefWindowProc(hwnd,
+        msg,
+        wParam,
+        lParam);
+}
+
+HRESULT CreateViews(UINT width, UINT height) {
+    HRESULT hr;
+    // Create a render target view
+    ID3D11Texture2D* pBackBuffer = nullptr;
+    hr = SwapChain->GetBuffer(0, __uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&pBackBuffer));
+    if (FAILED(hr))
+        return hr;
+
+    hr = d3d11Device->CreateRenderTargetView(pBackBuffer, nullptr, &renderTargetView);
+
+
+    pBackBuffer->Release();
+    if (FAILED(hr))
+        return hr;
+
+    d3d11DevCon->OMSetRenderTargets(1, &renderTargetView, nullptr);
+
+    // Setup the viewport
+    D3D11_VIEWPORT vp;
+    vp.Width = (FLOAT)width;
+    vp.Height = (FLOAT)height;
+    vp.MinDepth = 0.0f;
+    vp.MaxDepth = 1.0f;
+    vp.TopLeftX = 0;
+    vp.TopLeftY = 0;
+    d3d11DevCon->RSSetViewports(1, &vp);
+
+    return S_OK;
+
+}
